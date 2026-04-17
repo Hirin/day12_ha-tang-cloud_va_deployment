@@ -41,6 +41,18 @@ def run_checks():
     results.append(check("railway.toml or render.yaml exists",
                          os.path.exists(os.path.join(base, "railway.toml")) or
                          os.path.exists(os.path.join(base, "render.yaml"))))
+    results.append(check("nginx.conf exists",
+                         os.path.exists(os.path.join(base, "nginx.conf"))))
+    railway_file = os.path.join(base, "railway.toml")
+    if os.path.exists(railway_file):
+        railway_content = open(railway_file).read()
+        results.append(check("Railway healthcheck uses /ready",
+                             'healthcheckPath = "/ready"' in railway_content))
+    render_file = os.path.join(base, "render.yaml")
+    if os.path.exists(render_file):
+        render_content = open(render_file).read()
+        results.append(check("Render health check uses /ready",
+                             "healthCheckPath: /ready" in render_content))
 
     # ── Security ──────────────────────────────────���
     print("\n🔒 Security")
@@ -83,6 +95,8 @@ def run_checks():
                              '"/health"' in content or "'/health'" in content))
         results.append(check("/ready endpoint defined",
                              '"/ready"' in content or "'/ready'" in content))
+        results.append(check("/metrics endpoint defined",
+                             '"/metrics"' in content or "'/metrics'" in content))
         results.append(check("Authentication implemented",
                              "api_key" in content.lower() or "verify_token" in content))
         results.append(check("Rate limiting implemented",
@@ -91,8 +105,20 @@ def run_checks():
                              "SIGTERM" in content))
         results.append(check("Structured logging (JSON)",
                              "json.dumps" in content or '"event"' in content))
+        results.append(check("Redis-backed conversation history",
+                             "history:" in content and "redis" in content.lower()))
+        results.append(check("Cost-optimized model context",
+                             "model_context_messages" in content))
+        results.append(check("OpenTelemetry tracing enabled",
+                             "opentelemetry" in content.lower() or "trace_id" in content))
     else:
         results.append(check("app/main.py exists", False, "Create app/main.py!"))
+
+    for module_name in ["auth.py", "rate_limiter.py", "cost_guard.py"]:
+        results.append(check(
+            f"app/{module_name} exists",
+            os.path.exists(os.path.join(base, "app", module_name))
+        ))
 
     # ── Docker ─────────────────────────────────────
     print("\n🐳 Docker")
@@ -115,6 +141,18 @@ def run_checks():
                              ".env" in content))
         results.append(check(".dockerignore covers __pycache__",
                              "__pycache__" in content))
+
+    compose_file = os.path.join(base, "docker-compose.yml")
+    if os.path.exists(compose_file):
+        content = open(compose_file).read()
+        results.append(check("docker-compose includes redis",
+                             "redis:" in content))
+        results.append(check("docker-compose includes nginx",
+                             "nginx:" in content))
+        results.append(check("docker-compose includes prometheus",
+                             "prometheus:" in content))
+        results.append(check("docker-compose agent healthcheck uses /ready",
+                             "/ready" in content))
 
     # ── Summary ───────────────────────────────────���
     passed = sum(1 for r in results if r["passed"])

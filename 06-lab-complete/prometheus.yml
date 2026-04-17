@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "day12-agent"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["agent:8000"]

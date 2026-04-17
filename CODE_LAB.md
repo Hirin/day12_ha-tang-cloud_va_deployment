@@ -316,6 +316,7 @@ cd ../render
 7. Deploy!
 
 **Nhiệm vụ:** So sánh `render.yaml` với `railway.toml`. Khác nhau gì?
+- Khác nhau giao diện, phương thức thao tác và cách tính free tier.
 
 ###  Exercise 3.3: (Optional) GCP Cloud Run (15 phút)
 
@@ -329,10 +330,10 @@ cd ../production-cloud-run
 
 ###  Checkpoint 3
 
-- [ ] Deploy thành công lên ít nhất 1 platform
-- [ ] Có public URL hoạt động
-- [ ] Hiểu cách set environment variables trên cloud
-- [ ] Biết cách xem logs
+- [x] Deploy thành công lên ít nhất 1 platform
+- [x] Có public URL hoạt động
+- [x] Hiểu cách set environment variables trên cloud
+- [x] Biết cách xem logs
 
 ---
 
@@ -355,8 +356,11 @@ cd ../../04-api-gateway/develop
 
 **Nhiệm vụ:** Đọc `app.py` và tìm:
 - API key được check ở đâu?
+  - Được kiểm tra trong hàm `verify_api_key` (dòng 39). Hàm này sử dụng `APIKeyHeader(name="X-API-Key")` để trích xuất key từ request header và được tiêm vào endpoint `/ask` bằng `Depends(verify_api_key)`.
 - Điều gì xảy ra nếu sai key?
+  - Nếu thiếu key, hệ thống trả về lỗi `401 Unauthorized`. Nếu key sai so với cấu hình, hệ thống trả về lỗi `403 Forbidden`.
 - Làm sao rotate key?
+  - Vì key được đọc từ biến môi trường `AGENT_API_KEY` (`os.getenv`), bạn chỉ cần thay đổi giá trị biến này trong cấu hình của Platform (Railway/Render) hoặc file `.env` và restart lại app. Không cần sửa mã nguồn.
 
 Test:
 ```bash
@@ -404,8 +408,11 @@ curl http://localhost:8000/ask -X POST \
 
 **Nhiệm vụ:** Đọc `rate_limiter.py` và trả lời:
 - Algorithm nào được dùng? (Token bucket? Sliding window?)
+  - Thuật toán **Sliding Window Counter**. Hệ thống sử dụng một hàng đợi (`deque`) để lưu timestamps của từng request và loại bỏ các bản ghi cũ vượt quá cửa sổ thời gian (60s).
 - Limit là bao nhiêu requests/minute?
+  - Mặc định cho User thông thường là **10 requests/minute** .
 - Làm sao bypass limit cho admin?
+  - Sử dụng cơ chế phân tầng (Tiers). Trong code đã định nghĩa sẵn `rate_limiter_admin` với giới hạn cao hơn hẳn (**100 requests/minute**. Hệ thống sẽ kiểm tra quyền (role) của user để quyết định áp dụng bộ giới hạn nào.
 
 Test:
 ```bash
@@ -465,10 +472,10 @@ def check_budget(user_id: str, estimated_cost: float) -> bool:
 
 ###  Checkpoint 4
 
-- [ ] Implement API key authentication
-- [ ] Hiểu JWT flow
-- [ ] Implement rate limiting
-- [ ] Implement cost guard với Redis
+- [x] Implement API key authentication
+- [x] Hiểu JWT flow
+- [x] Implement rate limiting
+- [x] Implement cost guard với Redis
 
 ---
 
@@ -568,6 +575,28 @@ kill -TERM $PID
 # Quan sát: Request có hoàn thành không?
 ```
 
+**Kết quả:**
+```bash
+  python app.py
+2026-04-17 16:18:13,379 INFO Starting agent on port 8000
+INFO:     Started server process [110811]
+INFO:     Waiting for application startup.
+2026-04-17 16:18:13,416 INFO Agent starting up...
+2026-04-17 16:18:13,416 INFO Loading model and checking dependencies...
+2026-04-17 16:18:13,616 INFO ✅ Agent is ready!
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:58184 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55412 - "GET /ready HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-04-17 16:20:07,630 INFO 🔄 Graceful shutdown initiated...
+2026-04-17 16:20:07,631 INFO ✅ Shutdown complete
+INFO:     Application shutdown complete.
+INFO:     Finished server process [110811]
+2026-04-17 16:20:07,631 INFO Received signal 15 — uvicorn will handle graceful shutdown
+```
+
 ###  Exercise 5.3: Stateless design
 
 ```bash
@@ -596,7 +625,23 @@ def ask(user_id: str, question: str):
     # ...
 ```
 
-Tại sao? Vì khi scale ra nhiều instances, mỗi instance có memory riêng.
+**Tại sao phải Stateless?** Vì khi scale ra nhiều instances, mỗi instance có memory riêng.
+
+Ví dụ minh hoạ:
+```
+Request 1 → Load Balancer → Agent1  (lưu history vào RAM Agent1)
+Request 2 → Load Balancer → Agent2  (Agent2 không có history → MẤT CONTEXT!)
+```
+
+Khi dùng Redis (bộ nhớ dùng chung bên ngoài), mọi instance đều đọc/ghi vào cùng 1 nơi:
+```
+Request 1 → Agent1 → lưu history vào Redis
+Request 2 → Agent2 → đọc history từ Redis → CÓ CONTEXT ✅
+```
+
+Xem file `production/app.py` để thấy cách triển khai cụ thể:
+- `save_session()` / `load_session()`: serialize dữ liệu thành JSON rồi lưu vào Redis với TTL (tự xoá sau 1 giờ).
+- Trường `served_by` trong response cho biết instance nào đã xử lý request → chứng minh bất kỳ instance nào cũng serve được.
 
 ###  Exercise 5.4: Load balancing
 
@@ -637,11 +682,11 @@ Script này:
 
 ###  Checkpoint 5
 
-- [ ] Implement health và readiness checks
-- [ ] Implement graceful shutdown
-- [ ] Refactor code thành stateless
-- [ ] Hiểu load balancing với Nginx
-- [ ] Test stateless design
+- [x] Implement health và readiness checks
+- [x] Implement graceful shutdown
+- [x] Refactor code thành stateless
+- [x] Hiểu load balancing với Nginx
+- [x] Test stateless design
 
 ---
 

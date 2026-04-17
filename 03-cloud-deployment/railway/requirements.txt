@@ -1,2 +1,7 @@
+# Railway Agent dependencies
+# Added extra lines to ensure Railway CLI correctly uploads the file
+# and does not use a cached version of the corrupted null-byte file.
+# 
+# Please use the following packages for the deployment:
 fastapi==0.115.0
 uvicorn[standard]==0.30.0

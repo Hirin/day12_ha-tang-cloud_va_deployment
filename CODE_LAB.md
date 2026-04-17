@@ -87,9 +87,7 @@ python app.py
 
 Test:
 ```bash
-curl http://localhost:8000/ask -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Hello"}'
+curl "http://localhost:8000/ask?question=Hello" -X POST
 ```
 
 **Quan sát:** Nó chạy! Nhưng có production-ready không?
@@ -103,21 +101,30 @@ pip install -r requirements.txt
 python app.py
 ```
 
+Test:
+```bash
+curl http://localhost:8000/ask -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hello"}'
+```
+
 **Nhiệm vụ:** So sánh 2 files `app.py`. Điền vào bảng:
 
 | Feature | Basic | Advanced | Tại sao quan trọng? |
 |---------|-------|----------|---------------------|
-| Config | Hardcode | Env vars | ... |
-| Health check |  |  | ... |
-| Logging | print() | JSON | ... |
-| Shutdown | Đột ngột | Graceful | ... |
+| Config | Hardcode trong code | Env vars (`.env` + `pydantic Settings`) | Push code lên GitHub → secret bị lộ. Env vars tách config khỏi code, mỗi môi trường (dev/staging/prod) dùng giá trị khác nhau mà không cần sửa code |
+| Health check | Không có | `/health` + `/ready` | Platform (Railway, K8s) gọi health check định kỳ. Không có → platform không biết app crash để restart. `/ready` giúp load balancer biết khi nào app sẵn sàng nhận traffic |
+| Logging | `print()` — text thường, log cả secret | Structured JSON — không log secret | JSON log dễ parse bởi Datadog/Loki/ELK. `print()` lẫn lộn với output khác, không filter được. Log secret ra là lỗ hổng bảo mật nghiêm trọng |
+| Shutdown | Đột ngột (`Ctrl+C` là chết) | Graceful (xử lý SIGTERM, chờ request hoàn thành) | Tắt đột ngột → request đang xử lý bị mất, user nhận lỗi 500. Graceful shutdown cho phép hoàn thành request rồi mới tắt |
+| CORS | Không có | Cấu hình `allow_origins` | Không có CORS → frontend từ domain khác không gọi được API, hoặc mở `*` thì ai cũng gọi được |
+| Binding | `localhost` (chỉ local) | `0.0.0.0` (nhận kết nối từ ngoài) | Trong container/cloud, `localhost` = chỉ container tự gọi chính nó. Phải bind `0.0.0.0` để nhận traffic từ bên ngoài |
 
 ###  Checkpoint 1
 
-- [ ] Hiểu tại sao hardcode secrets là nguy hiểm
-- [ ] Biết cách dùng environment variables
-- [ ] Hiểu vai trò của health check endpoint
-- [ ] Biết graceful shutdown là gì
+- [x] Hiểu tại sao hardcode secrets là nguy hiểm
+- [x] Biết cách dùng environment variables
+- [x] Hiểu vai trò của health check endpoint
+- [x] Biết graceful shutdown là gì
 
 ---
 
@@ -151,21 +158,24 @@ cd ../../02-docker/develop
 ###  Exercise 2.2: Build và run
 
 ```bash
+# ⚠️ PHẢI chạy từ PROJECT ROOT (day12_ha-tang-cloud_va_deployment/)
+# vì Dockerfile COPY đường dẫn tương đối từ root
+cd /mnt/shared/AI-Thuc-Chien/day12_ha-tang-cloud_va_deployment
+
 # Build image
-docker build -f 02-docker/develop/Dockerfile -t my-agent:develop .
+docker build -f 02-docker/develop/Dockerfile -t agent-develop .
 
 # Run container
-docker run -p 8000:8000 my-agent:develop
+docker run -p 8000:8000 agent-develop
 
 # Test
-curl http://localhost:8000/ask -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is Docker?"}'
+curl http://localhost:8000/health
+curl "http://localhost:8000/ask?question=Hello" -X POST
 ```
 
-**Quan sát:** Image size là bao nhiêu?
+**Quan sát:** Image size là bao nhiêu? 1.66GB
 ```bash
-docker images my-agent:develop
+docker images agent-develop
 ```
 
 ###  Exercise 2.3: Multi-stage build
@@ -254,18 +264,24 @@ railway login
 railway init
 ```
 
-4. Set environment variables:
+4. Link/create a service (project mới chưa có service):
+```bash
+# Lên web Railway → chọn "Create new service" → đặt tên, ví dụ: agent
+railway service
+```
+
+5. Set environment variables:
 ```bash
 railway variables set PORT=8000
 railway variables set AGENT_API_KEY=my-secret-key
 ```
 
-5. Deploy:
+6. Deploy:
 ```bash
 railway up
 ```
 
-6. Get public URL:
+7. Get public URL:
 ```bash
 railway domain
 ```

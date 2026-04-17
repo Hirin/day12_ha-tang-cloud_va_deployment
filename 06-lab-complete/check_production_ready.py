@@ -89,8 +89,10 @@ def run_checks():
     # ── API Endpoints ────────────────────────────��─
     print("\n🌐 API Endpoints (code check)")
     main_py = os.path.join(base, "app", "main.py")
+    chat_service_py = os.path.join(base, "app", "chat_service.py")
     if os.path.exists(main_py):
         content = open(main_py).read()
+        chat_service_content = open(chat_service_py).read() if os.path.exists(chat_service_py) else ""
         results.append(check("/health endpoint defined",
                              '"/health"' in content or "'/health'" in content))
         results.append(check("/ready endpoint defined",
@@ -106,9 +108,10 @@ def run_checks():
         results.append(check("Structured logging (JSON)",
                              "json.dumps" in content or '"event"' in content))
         results.append(check("Redis-backed conversation history",
-                             "history:" in content and "redis" in content.lower()))
+                             ("history:" in content and "redis" in content.lower()) or
+                             ("history_with_question" in chat_service_content and "self.redis" in chat_service_content)))
         results.append(check("Cost-optimized model context",
-                             "model_context_messages" in content))
+                             "model_context_messages" in content or "model_context_messages" in chat_service_content))
         results.append(check("OpenTelemetry tracing enabled",
                              "opentelemetry" in content.lower() or "trace_id" in content))
     else:

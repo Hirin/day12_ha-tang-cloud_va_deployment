@@ -17,13 +17,16 @@ import redis
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import build_api_key_dependency
+from app.chat_service import ChatService
 from app.config import Settings, settings as default_settings
 from app.cost_guard import RedisCostGuard
+from app.gemini_client import build_llm
 from app.rate_limiter import RedisRateLimiter
-from utils.mock_llm import ask as mock_llm_ask
+from app.web_ui import CHAT_PAGE_HTML, normalize_nickname
 
 
 logger = logging.getLogger("day12.part6")
@@ -86,12 +89,21 @@ class AskResponse(BaseModel):
     usage: dict[str, float | int]
 
 
+class WebAskRequest(BaseModel):
+    nickname: str = Field(..., min_length=1, max_length=40)
+    question: str = Field(..., min_length=1, max_length=2000)
+
+    @field_validator("nickname")
+    @classmethod
+    def nickname_must_normalize(cls, value: str) -> str:
+        normalized = normalize_nickname(value)
+        if not normalized:
+            raise ValueError("Nickname is required")
+        return value
+
+
 def create_redis_client(redis_url: str):
     return redis.from_url(redis_url, decode_responses=True)
-
-
-def default_llm(question: str, _history: list[dict]) -> str:
-    return mock_llm_ask(question)
 
 
 def load_history(redis_client, user_id: str) -> list[dict]:
@@ -120,7 +132,7 @@ def create_app(
     app_settings = settings or default_settings
     configure_logging(app_settings.log_level)
     redis_conn = redis_client or create_redis_client(app_settings.redis_url)
-    llm = llm_func or default_llm
+    llm = llm_func or build_llm(app_settings)
     tracer = configure_tracing(app_settings)
     rate_limiter = RedisRateLimiter(
         redis_conn,
@@ -178,6 +190,16 @@ def create_app(
     app.state.redis = redis_conn
     app.state.rate_limiter = rate_limiter
     app.state.cost_guard = cost_guard
+    chat_service = ChatService(
+        settings=app_settings,
+        redis_client=redis_conn,
+        rate_limiter=rate_limiter,
+        cost_guard=cost_guard,
+        llm_func=llm,
+        load_history=load_history,
+        save_history=save_history,
+    )
+    app.state.chat_service = chat_service
 
     app.add_middleware(
         CORSMiddleware,
@@ -227,14 +249,9 @@ def create_app(
             )
             return response
 
-    @app.get("/")
+    @app.get("/", response_class=HTMLResponse)
     def root():
-        return {
-            "app": app_settings.app_name,
-            "version": app_settings.app_version,
-            "environment": app_settings.environment,
-            "instance_id": app_settings.instance_id,
-        }
+        return HTMLResponse(CHAT_PAGE_HTML)
 
     @app.get("/health")
     def health():
@@ -272,60 +289,46 @@ def create_app(
         body: AskRequest,
         _api_key: str = Depends(verify_api_key),
     ):
-        cost_guard.check_budget(body.user_id)
-        rate_info = rate_limiter.check(body.user_id)
-
-        history = load_history(redis_conn, body.user_id)
-        user_message = {
-            "role": "user",
-            "content": body.question,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        history_with_question = history + [user_message]
-        llm_context = history_with_question[-app_settings.model_context_messages :]
-        answer = llm(body.question, llm_context)
-        assistant_message = {
-            "role": "assistant",
-            "content": answer,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        updated_history = (history_with_question + [assistant_message])[
-            -app_settings.conversation_history_limit :
-        ]
-        save_history(
-            redis_conn,
-            body.user_id,
-            updated_history,
-            ttl_seconds=app_settings.conversation_ttl_seconds,
-        )
-
-        input_tokens = len(body.question.split()) * 2
-        output_tokens = len(answer.split()) * 2
-        usage = cost_guard.record_usage(
-            body.user_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
-        usage.update(rate_info)
-        usage["context_messages_used"] = len(llm_context)
-
+        result = chat_service.ask(user_id=body.user_id, question=body.question)
         log_event(
             "agent_answered",
-            user_id=body.user_id,
-            history_length=len(updated_history),
-            context_messages_used=len(llm_context),
+            user_id=result["user_id"],
+            history_length=result["history_length"],
+            context_messages_used=result["usage"]["context_messages_used"],
             instance_id=app_settings.instance_id,
         )
 
         return AskResponse(
-            user_id=body.user_id,
-            question=body.question,
-            answer=answer,
-            history_length=len(updated_history),
+            user_id=result["user_id"],
+            question=result["question"],
+            answer=result["answer"],
+            history_length=result["history_length"],
             served_by=app_settings.instance_id,
             model=app_settings.llm_model,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            usage=usage,
+            usage=result["usage"],
+        )
+
+    @app.post("/web/ask", response_model=AskResponse)
+    async def ask_from_web(body: WebAskRequest):
+        user_id = normalize_nickname(body.nickname)
+        result = chat_service.ask(user_id=user_id, question=body.question)
+        log_event(
+            "web_agent_answered",
+            user_id=result["user_id"],
+            history_length=result["history_length"],
+            context_messages_used=result["usage"]["context_messages_used"],
+            instance_id=app_settings.instance_id,
+        )
+        return AskResponse(
+            user_id=result["user_id"],
+            question=result["question"],
+            answer=result["answer"],
+            history_length=result["history_length"],
+            served_by=app_settings.instance_id,
+            model=app_settings.llm_model,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            usage=result["usage"],
         )
 
     return app

@@ -28,8 +28,20 @@ class Settings:
         )
     )
 
-    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
-    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "mock-llm"))
+    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
+    gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("LLM_MODEL", "gemini-3.1-flash-lite-preview")
+    )
+    gemini_api_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "GEMINI_API_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
+    )
+    gemini_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
+    )
 
     agent_api_key: str = field(
         default_factory=lambda: os.getenv("AGENT_API_KEY", "dev-key-change-me")
@@ -68,6 +80,10 @@ class Settings:
     )
 
     def __post_init__(self):
+        self.llm_provider = self.llm_provider.strip().lower()
+        if self.llm_provider != "gemini":
+            raise ValueError("LLM_PROVIDER must be gemini")
+
         if isinstance(self.allowed_origins, str):
             self.allowed_origins = self.allowed_origins.split(",")
         self.allowed_origins = [origin.strip() for origin in self.allowed_origins if origin.strip()]
@@ -76,6 +92,8 @@ class Settings:
 
         if self.environment == "production" and self.agent_api_key == "dev-key-change-me":
             raise ValueError("AGENT_API_KEY must be set in production")
+        if self.environment == "production" and not self.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY must be set when LLM_PROVIDER=gemini in production")
 
 
 settings = Settings()

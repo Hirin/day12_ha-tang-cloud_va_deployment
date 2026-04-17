@@ -4,8 +4,11 @@
 
 ## Có gì trong project này
 
-- API FastAPI với endpoint `POST /ask`
-- Xác thực bằng `X-API-Key`
+- Public web chat UI tại `GET /`
+- API FastAPI được bảo vệ tại `POST /ask`
+- Route public cho browser tại `POST /web/ask`
+- Xác thực `X-API-Key` cho route API protected
+- Gemini provider support qua `GEMINI_API_KEY` ở backend
 - Lưu lịch sử hội thoại trong Redis
 - Rate limit theo user: `10 request/phút`
 - Budget guard theo tháng: mặc định `$10/user/tháng`
@@ -23,12 +26,14 @@
 ```text
 06-lab-complete/
 ├── app/
+│   ├── chat_service.py
 │   ├── main.py
 │   ├── config.py
 │   ├── auth.py
 │   ├── rate_limiter.py
-│   └── cost_guard.py
-├── utils/mock_llm.py
+│   ├── cost_guard.py
+│   ├── gemini_client.py
+│   └── web_ui.py
 ├── tests/test_app.py
 ├── Dockerfile
 ├── docker-compose.yml
@@ -83,13 +88,27 @@ docker compose down -v
 curl http://localhost:8080/health
 ```
 
+### Mở public chat UI
+
+```bash
+curl http://localhost:8080/
+```
+
 ### Readiness check
 
 ```bash
 curl http://localhost:8080/ready
 ```
 
-### Gọi agent có API key
+### Gọi public web route
+
+```bash
+curl -X POST http://localhost:8080/web/ask \
+  -H "Content-Type: application/json" \
+  -d '{"nickname":"alice","question":"What is deployment?"}'
+```
+
+### Gọi protected API có API key
 
 ```bash
 curl -X POST http://localhost:8080/ask \
@@ -126,6 +145,8 @@ docker run --rm \
 
 Test hiện có kiểm tra:
 
+- `/` trả về HTML chat UI
+- `/web/ask` hoạt động không cần `X-API-Key`
 - Thiếu API key thì bị `401`
 - Redis lỗi thì `/ready` trả `503`
 - History hội thoại được giữ qua nhiều request
@@ -153,10 +174,26 @@ Checker sẽ rà:
 Sau khi `docker compose up --build --scale agent=3`, chạy:
 
 ```bash
+curl http://localhost:8080/
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
 curl http://localhost:8080/metrics
 ```
+
+Test public chat route:
+
+```bash
+curl -i -X POST http://localhost:8080/web/ask \
+  -H "Content-Type: application/json" \
+  -d '{"nickname":"alice","question":"What is deployment?"}'
+```
+
+Kỳ vọng:
+
+- HTTP `200`
+- không cần `X-API-Key`
+- JSON có `user_id` = `alice`
+- JSON có `history_length`
 
 Test auth fail:
 
@@ -289,6 +326,9 @@ Railway là hướng ưu tiên.
    - `ENVIRONMENT=production`
    - `AGENT_API_KEY=<your-secret-key>`
    - `REDIS_URL=<Redis internal URL do Railway cấp>`
+   - `LLM_PROVIDER=gemini`
+   - `GEMINI_API_KEY=<your-gemini-key>`
+   - `LLM_MODEL=gemini-3.1-flash-lite-preview`
    - `RATE_LIMIT_PER_MINUTE=10`
    - `MONTHLY_BUDGET_USD=10.0`
    - `LOG_LEVEL=INFO`
@@ -317,6 +357,14 @@ curl -i https://your-app.up.railway.app/metrics
 ```
 
 Kỳ vọng: HTTP `200`, `content-type` là text metrics của Prometheus.
+
+Test public UI route:
+
+```bash
+curl -i https://your-app.up.railway.app/
+```
+
+Kỳ vọng: HTTP `200`, `content-type` là `text/html`.
 
 Test request thành công:
 
@@ -357,8 +405,21 @@ Dùng khi Railway build/runtime fail liên tục.
 1. Push repo lên GitHub
 2. Tạo service từ `render.yaml`
 3. Provision Redis
-4. Set `REDIS_URL`
-5. Test lại 4 endpoint như trên
+4. Set các env:
+
+```env
+ENVIRONMENT=production
+AGENT_API_KEY=lab12-test
+REDIS_URL=redis://...
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+LLM_MODEL=gemini-3.1-flash-lite-preview
+RATE_LIMIT_PER_MINUTE=10
+MONTHLY_BUDGET_USD=10.0
+LOG_LEVEL=INFO
+```
+
+5. Test lại `/`, `/ready`, `/metrics`, `/web/ask`, và `POST /ask`
 
 ## Next step
 
